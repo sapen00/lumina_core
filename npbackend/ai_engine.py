@@ -1,6 +1,7 @@
 import torch
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+# We use explicit MT5 classes to ensure your model loads correctly
+from transformers import pipeline, T5Tokenizer, MT5ForConditionalGeneration, AutoTokenizer, AutoModelForSeq2SeqLM
 
 class NepaliAIEngine:
     _instance = None
@@ -8,28 +9,39 @@ class NepaliAIEngine:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(NepaliAIEngine, cls).__new__(cls)
-            print("--- 🇳🇵 Initializing Nepali AI Engine ---")
+            print("--- 🇳🇵 Initializing Lumina Nepali AI Engine ---")
             
-            # 1. SEARCH/EMBEDDING MODEL (Using multilingual MiniLM - essentially a distilled mBERT)
-            # This converts Nepali text into numbers for vector search.
+            # Use GPU if available, else CPU
+            device_id = 0 if torch.cuda.is_available() else -1
+            device_name = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"--- 🚀 Running on: {device_name.upper()} ---")
+            
+            # 1. SEARCH/EMBEDDING MODEL
             cls._instance.embedder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
             
             # 2. CLASSIFICATION (Zero-Shot)
             cls._instance.classifier = pipeline(
                 "zero-shot-classification", 
                 model="facebook/bart-large-mnli",
-                device=-1 # CPU for now, change to 0 for GPU
+                device=device_id
             )
             
-            # 3. SUMMARIZATION (Upgraded from simple mBERT to mBART or mT5)
-            # mBERT cannot generate text effectively. We use a model fine-tuned for Nepali summarization.
-            # 'GenzNepal/mt5-summarize-nepali' is a good candidate for this specific task.
-            print("--- 🧠 Loading Summarization Model (mT5/mBART) ---")
+            # 3. YOUR CUSTOM SUMMARIZATION MODEL
+            cls._instance.my_model_id = "sapen-00/nepali_news_summ"
+            print(f"--- 🧠 Loading CUSTOM Nepali Model: {cls._instance.my_model_id} ---")
+            
             try:
-                cls._instance.summ_tokenizer = AutoTokenizer.from_pretrained("GenzNepal/mt5-summarize-nepali")
-                cls._instance.summ_model = AutoModelForSeq2SeqLM.from_pretrained("GenzNepal/mt5-summarize-nepali")
+                # Using T5Tokenizer and MT5ForConditionalGeneration explicitly fixes the 'Unrecognized' error
+                cls._instance.summ_tokenizer = T5Tokenizer.from_pretrained(cls._instance.my_model_id)
+                cls._instance.summ_model = MT5ForConditionalGeneration.from_pretrained(cls._instance.my_model_id)
+                
+                if device_name == "cuda":
+                    cls._instance.summ_model = cls._instance.summ_model.to("cuda")
+                print("✅ Custom model loaded successfully!")
+                    
             except Exception as e:
-                print(f"⚠️ Could not load specific Nepali model, falling back to mBART-50: {e}")
+                print(f"⚠️ Could not load your model, falling back to mBART: {e}")
+                # Fallback also needs to be robust
                 cls._instance.summ_tokenizer = AutoTokenizer.from_pretrained("facebook/mbart-large-50")
                 cls._instance.summ_model = AutoModelForSeq2SeqLM.from_pretrained("facebook/mbart-large-50")
 
@@ -42,44 +54,43 @@ class NepaliAIEngine:
         return self.embedder.encode(text).tolist()
 
     def classify_nepali(self, text):
-        """Categorizes Nepali text into Devanagari labels"""
         try:
-            # We classify using English labels internally for better accuracy with BART, 
-            # then map to Nepali, or pass Nepali directly if the model supports it well.
-            # Using direct Nepali here:
             res = self.classifier(text[:500], self.categories)
             return res['labels'][0]
         except:
-            return "विविध" # Miscellaneous
+            return "विविध"
 
     def summarize_cluster(self, texts):
-        """
-        Takes a list of article contents (a cluster) and generates a single Nepali summary.
-        """
         if not texts: return ""
         
-        # Combine first 2-3 sentences of top 3 articles to form input context
-        combined_text = " ".join([t[:500] for t in texts[:3]])
+        # We only use the first 2 articles to keep the summary concise and fast
+        combined_text = " ".join([t[:500] for t in texts[:2]])
         
         try:
-            inputs = self.summ_tokenizer(
-                "summarize: " + combined_text, 
-                return_tensors="pt", 
-                max_length=1024, 
-                truncation=True
-            )
+            # Prefix 'summarize: ' is usually required for T5-based models
+            input_text = "summarize: " + combined_text
             
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            inputs = self.summ_tokenizer(
+                input_text, 
+                return_tensors="pt", 
+                max_length=512, 
+                truncation=True
+            ).to(device)
+            
+            # Generate shorter output since you trained for headlines/summaries
             summary_ids = self.summ_model.generate(
                 inputs["input_ids"], 
-                max_length=150, 
-                min_length=40, 
-                length_penalty=2.0, 
+                max_length=80, 
+                min_length=15, 
+                length_penalty=1.5, 
                 num_beams=4, 
                 early_stopping=True
             )
             
             summary = self.summ_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
             return summary
+            
         except Exception as e:
             print(f"Summarization failed: {e}")
-            return texts[0][:200] + "..." # Fallback to truncation
+            return texts[0][:150] + "..."
