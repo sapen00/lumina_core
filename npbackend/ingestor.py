@@ -14,10 +14,6 @@ class NepaliIngestor:
     # ... (sync_huggingface_dataset remains the same)
 
     def fetch_and_process(self, query=None, country="np", category=None):
-        """
-        Fetches live news from NewsData.io. 
-        Fixed to correctly pass the 'category' parameter to the API.
-        """
         if not self.api_key:
             print("❌ No API Key for NewsData.io found.")
             return
@@ -30,8 +26,6 @@ class NepaliIngestor:
             "country": country,
             "language": "ne",
         }
-        
-        # KEY FIX: Pass category and query to the params if they exist
         if query:
             params["q"] = query
         if category:
@@ -42,13 +36,11 @@ class NepaliIngestor:
             data = response.json()
             
             if data.get("status") != "success":
-                # Detailed error logging helps debug API limit issues
                 print(f"❌ API Error: {data.get('results', {}).get('message', 'Unknown error')}")
                 return
 
             articles_to_insert = []
             for art in data.get("results", []):
-                # Check duplication by Link
                 if self.db.articles.find_one({"url": art.get("link")}):
                     continue
                 

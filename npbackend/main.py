@@ -34,7 +34,7 @@ def perform_clustering_logic():
     
     model = AgglomerativeClustering(
         n_clusters=None,
-        distance_threshold=0.40,
+        distance_threshold=0.25,
         metric='cosine',
         linkage='average'
     )
@@ -94,15 +94,16 @@ def trending_refresh_job():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # This ensures the 1-hour background sync actually starts
+    import asyncio
+    # Wait 5 seconds for the AI Engine to warm up before starting the sync
+    await asyncio.sleep(5) 
+    
+    scheduler.add_job(trending_refresh_job, 'date') 
     scheduler.add_job(trending_refresh_job, 'interval', hours=1)
     scheduler.start()
     yield
     scheduler.shutdown()
 
-# --- FASTAPI APP ---
-
-# IMPORTANT: Passed the lifespan to the app here
 app = FastAPI(title="Lumina Nepali Portal", lifespan=lifespan)
 
 app.add_middleware(
@@ -111,8 +112,6 @@ app.add_middleware(
     allow_methods=["*"], 
     allow_headers=["*"]
 )
-
-# --- ENDPOINTS ---
 
 @app.get("/search")
 async def nepali_hybrid_search(
@@ -195,3 +194,30 @@ def manual_trending_refresh(background_tasks: BackgroundTasks):
 def manual_clustering():
     perform_clustering_logic()
     return {"message": "Clustering process finished."}
+
+@app.delete("/admin/reset-database")
+async def reset_database(confirm: bool = Query(False)):
+    """
+    DANGER: This will delete all articles and clusters from the database.
+    Must pass ?confirm=true to execute.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400, 
+            detail="You must confirm deletion by setting the 'confirm' query parameter to true."
+        )
+
+    db = get_db()
+    
+    # Delete all documents from the two main collections
+    articles_res = db.articles.delete_many({})
+    clusters_res = db.clusters.delete_many({})
+    
+    return {
+        "status": "success",
+        "message": "Database cleared successfully.",
+        "deleted_counts": {
+            "articles": articles_res.deleted_count,
+            "clusters": clusters_res.deleted_count
+        }
+    }
